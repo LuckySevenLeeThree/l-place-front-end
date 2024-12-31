@@ -27,6 +27,9 @@ function App() {
   const MIN_ZOOM = 1; 
   const MAX_ZOOM = 4;
 
+  // ref 추가
+  const mainCanvasRef = useRef(null);
+
   // 캔버스 픽셀 상태
   const [canvasData, setCanvasData] = useState(
     Array.from({ length: CANVAS_SIZE }, () => Array(CANVAS_SIZE).fill(null))
@@ -185,8 +188,11 @@ function App() {
   const handleMouseMove = (e) => {
     if (!usernameRef.current || !clientRef.current?.connected) return;
 
+    // ref가 존재하는지 확인
+    if (!mainCanvasRef.current) return;
+
     // 커서 위치 WS 전송
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = mainCanvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const canvasX = Math.floor(x / (CELL_SIZE / viewport.zoom) + viewport.x);
@@ -229,13 +235,15 @@ function App() {
   };
 
   const handleWheel = (e) => {
-    // 채팅 영역 스크롤 무시
     if (e.target.closest('.chat-section')) return;
     e.preventDefault();
 
+    // ref가 존재하는지 확인
+    if (!mainCanvasRef.current) return;
+
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     setViewport((prev) => {
-      const rect = e.currentTarget.getBoundingClientRect();
+      const rect = mainCanvasRef.current.getBoundingClientRect();
       const mouseCanvasX = (e.clientX - rect.left);
       const mouseCanvasY = (e.clientY - rect.top);
 
@@ -363,6 +371,7 @@ function App() {
 
       {/* 캔버스 */}
       <CanvasSection
+        ref={mainCanvasRef}
         canvasData={canvasData}
         viewport={viewport}
         cellSize={CELL_SIZE}

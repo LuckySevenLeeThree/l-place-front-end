@@ -1,7 +1,7 @@
 // src/components/CanvasSection.jsx
-import React, { useRef, useEffect } from 'react';
+import React, { forwardRef, useRef, useEffect } from 'react';
 
-function CanvasSection({
+const CanvasSection = forwardRef(({
   canvasData,
   viewport,
   cellSize,
@@ -14,7 +14,7 @@ function CanvasSection({
   onWheel,
   // 가장 중요한: (x, y) 계산 후 부모에게 넘길 함수
   onPixelClick,
-}) {
+}, ref) => {
   const canvasRef = useRef(null);
 
   // 1) 캔버스 렌더링 함수
@@ -80,17 +80,22 @@ function CanvasSection({
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="canvas"
-      // 크기는 내부에서 조정하므로 width/height 속성은 생략 가능
+    <div 
+      ref={ref}
+      className="canvas-section"
       onClick={handleClick}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onWheel={onWheel}
-    />
+    >
+      <canvas
+        ref={canvasRef}
+        className="canvas"
+        // 크기는 내부에서 조정하므로 width/height 속성은 생략 가능
+      />
+    </div>
   );
-}
+});
 
 export default CanvasSection;

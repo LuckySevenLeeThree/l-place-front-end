@@ -27,7 +27,6 @@ function App() {
   const MIN_ZOOM = 1; 
   const MAX_ZOOM = 4;
 
-  // 캔버스 픽셀 상태
   const [canvasData, setCanvasData] = useState(
     Array.from({ length: CANVAS_SIZE }, () => Array(CANVAS_SIZE).fill(null))
   );
@@ -69,30 +68,70 @@ function App() {
       const initialCanvas = Array.from({ length: CANVAS_SIZE }, () =>
         Array(CANVAS_SIZE).fill(null)
       );
-      data.forEach(({ x, y, color }) => {
-        if (x >= 0 && x < CANVAS_SIZE && y >= 0 && y < CANVAS_SIZE) {
-          initialCanvas[y][x] = { x, y, color };
+  
+      // 서버에서 받은 픽셀 데이터 적용
+      pixels.forEach(pixel => {
+        if (
+          pixel &&
+          pixel.x >= 0 &&
+          pixel.x < CANVAS_SIZE &&
+          pixel.y >= 0 &&
+          pixel.y < CANVAS_SIZE
+        ) {
+          initialCanvas[pixel.y][pixel.x] = {
+            x: pixel.x,
+            y: pixel.y,
+            color: pixel.color,
+          };
         }
       });
-
+  
+      // 상태 업데이트
       setCanvasData(initialCanvas);
     } catch (error) {
       console.error('캔버스 데이터 가져오기 오류:', error);
     }
   };
-
-  // 최초 실행
   useEffect(() => {
     fetchCanvasData();
+    
+    // localStorage에서 닉네임 확인 또는 새로 생성
+    const savedUsername = localStorage.getItem('username');
+    if (savedUsername) {
+      usernameRef.current = savedUsername;
+    } else {
+      const newUsername = getRandomNickname(type);
+      usernameRef.current = newUsername;
+      localStorage.setItem('username', newUsername);
+    }
 
-    usernameRef.current = getRandomNickname(type);
-    // 캔버스 정 중앙에서 시작
-    const initialZoom = 2;
-    const visibleCells = CANVAS_SIZE / initialZoom;
+    // 화면 크기에 맞춰 초기 줌 레벨 계산
+    const windowAspect = window.innerWidth / window.innerHeight;
+    const canvasAspect = CANVAS_SIZE / CANVAS_SIZE;
+    
+    let initialZoom;
+    if (windowAspect > canvasAspect) {
+      // 화면이 더 넓은 경우 높이에 맞춤
+      initialZoom = window.innerHeight / (CANVAS_SIZE * CELL_SIZE);
+    } else {
+      // 화면이 더 좁은 경우 너비에 맞춤
+      initialZoom = window.innerWidth / (CANVAS_SIZE * CELL_SIZE);
+    }
+
+    // 여유 공간을 위해 약간 줄임
+    initialZoom *= 0.9;
+    
+    // 줌 범위 제한 적용
+    initialZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom));
+
+    // 중앙 정렬을 위한 위치 계산
+    const centerX = (CANVAS_SIZE - window.innerWidth / (CELL_SIZE * initialZoom)) / 2;
+    const centerY = (CANVAS_SIZE - window.innerHeight / (CELL_SIZE * initialZoom)) / 2;
+
     setViewport({
-      x: CANVAS_SIZE / 2 - visibleCells / 2,
-      y: CANVAS_SIZE / 2 - visibleCells / 2,
-      zoom: initialZoom,
+      x: centerX,
+      y: centerY,
+      zoom: initialZoom
     });
   }, []);
 
@@ -182,6 +221,57 @@ function App() {
     }
   };
 
+  // handleWheel 함수 수정
+  const handleWheel = (e) => {
+    if (e.target.closest('.chat-section')) return;
+    
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    
+    setViewport((prev) => {
+      const rect = mainCanvasRef.current.getBoundingClientRect();
+      const scaledCellSize = CELL_SIZE / prev.zoom;
+      
+      // 마우스 위치를 캔버스 상의 좌표로 변환
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      // 마우스 위치의 캔버스 좌표 계산
+      const pointX = mouseX / scaledCellSize + prev.x;
+      const pointY = mouseY / scaledCellSize + prev.y;
+      
+      // 새로운 줌 레벨
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * zoomFactor));
+      const newScaledCellSize = CELL_SIZE / newZoom;
+      
+      // 새로운 뷰포트 위치 계산
+      const newX = pointX - mouseX / newScaledCellSize;
+      const newY = pointY - mouseY / newScaledCellSize;
+
+      const newViewport = {
+        zoom: newZoom,
+        x: Math.max(-CANVAS_SIZE * 0.1, Math.min(CANVAS_SIZE * 1.1, newX)),
+        y: Math.max(-CANVAS_SIZE * 0.1, Math.min(CANVAS_SIZE * 1.1, newY))
+      };
+
+      // 새로운 뷰포트로 커서 위치 업데이트
+      if (clientRef.current?.connected) {
+        const cursorPos = calculateCursorPosition(e.clientX, e.clientY, newViewport);
+        clientRef.current.publish({
+          destination: '/app/cursors',
+          body: JSON.stringify({
+            username: usernameRef.current,
+            x: cursorPos.x,
+            y: cursorPos.y
+          })
+        });
+      }
+
+      return newViewport;
+    });
+  };
+
+  // handleMouseMove 함수도 수정
   const handleMouseMove = (e) => {
     if (!usernameRef.current || !clientRef.current?.connected) return;
 
@@ -192,14 +282,37 @@ function App() {
     const canvasX = Math.floor(x / (CELL_SIZE / viewport.zoom) + viewport.x);
     const canvasY = Math.floor(y / (CELL_SIZE / viewport.zoom) + viewport.y);
 
+    // 드래그 처리
+    if (isDragging.current) {
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+      
+      setViewport((prev) => {
+        const scaledCellSize = CELL_SIZE / prev.zoom;
+        const moveX = dx / scaledCellSize;
+        const moveY = dy / scaledCellSize;
+
+        return {
+          ...prev,
+          x: prev.x - moveX,
+          y: prev.y - moveY
+        };
+      });
+
+      dragStart.current = { x: e.clientX, y: e.clientY };
+    }
+
+    // 커서 위치 업데이트에 분리된 함수 사용
+    const cursorPos = calculateCursorPosition(e.clientX, e.clientY, viewport);
     clientRef.current.publish({
       destination: '/app/cursors',
       body: JSON.stringify({
         username: usernameRef.current,
-        x: canvasX,
-        y: canvasY
+        x: cursorPos.x,
+        y: cursorPos.y
       })
     });
+  };
 
     // 드래그 이동
     if (!isDragging.current) return;
@@ -222,10 +335,21 @@ function App() {
       };
     });
     dragStart.current = { x: e.clientX, y: e.clientY };
+    
+    if (e.button === 0 && isSpacePressed) { // 스페이스바가 눌린 상태에서만 드래그
+      isDragging.current = true;
+      // 'dragging' 클래스를 main-canvas에 적용
+      mainCanvasRef.current.classList.add('dragging');
+    }
   };
 
-  const handleMouseUp = () => {
-    isDragging.current = false;
+  // handleMouseUp 함수 수정
+  const handleMouseUp = (e) => {
+    if (isDragging.current) {
+      isDragging.current = false;
+      // 'dragging' 클래스를 main-canvas에서 제거
+      mainCanvasRef.current.classList.remove('dragging');
+    }
   };
 
   const handleWheel = (e) => {
@@ -330,13 +454,14 @@ function App() {
     usernameRef.current = newUsername;
   };
 
+
   return (
     <div
       className="app-container"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
       onWheel={handleWheel}
     >
       <CursorLayer
@@ -393,6 +518,5 @@ function App() {
       )}
     </div>
   );
-}
 
 export default App;

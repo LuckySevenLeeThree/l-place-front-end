@@ -64,6 +64,8 @@ function App() {
 
   const type = 'animals'; // getRandomNickname에 사용
 
+  const [isTyping, setIsTyping] = useState(false);
+
   const fetchCanvasData = async () => {
     try {
       const response = await fetch(`${process.env.REACT_APP_BACKEND_API_URL}/api/canvas`);
@@ -292,11 +294,11 @@ function App() {
 
   const handleSendMessage = (e) => {
     e.preventDefault();
-    if (!inputMessage.trim() || !usernameRef.current.trim()) return;
+    if (!inputMessage || !usernameRef.current.trim()) return;
 
     const message = { 
       sender: usernameRef.current.trim(),
-      content: inputMessage.trim(),
+      content: inputMessage,
       timestamp: Date.now()
     };
     
@@ -336,6 +338,24 @@ function App() {
   };
   const handleUsernameChange = (newUsername) => {
     usernameRef.current = newUsername;
+  };
+
+  // 키보드 이벤트 핸들러 추가
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === ' ' && !isTyping) {
+        e.preventDefault();
+        // 스페이스바로 하는 캔버스 조작 로직
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTyping]);
+
+  // 채팅 입력 상태 변경 핸들러
+  const handleTypingStateChange = (typing) => {
+    setIsTyping(typing);
   };
 
   return (
@@ -390,6 +410,8 @@ function App() {
         onSendMessage={handleSendMessage}
         onChatScroll={handleChatScroll}
         onUsernameClick={handleUsernameModalOpen}
+        chatContainerRef={chatContainerRef}
+        onTypingStateChange={handleTypingStateChange}
       />
 
       {/* 유저 이름 모달 */}

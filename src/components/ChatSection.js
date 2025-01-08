@@ -9,16 +9,32 @@ function ChatSection({
   onInputChange,
   onSendMessage,
   onChatScroll,
-  onUsernameClick
+  onUsernameClick,
+  chatContainerRef,
+  onTypingStateChange
 }) {
-  const chatContainerRef = useRef(null);
-
   // 새 메시지가 올 때마다 자동 스크롤
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // 키 이벤트 핸들러 추가
+  const handleKeyDown = (e) => {
+    if (e.key === ' ') {
+      e.stopPropagation();
+    }
+  };
+
+  // 입력 필드 focus 상태 관리
+  const handleInputFocus = () => {
+    onTypingStateChange(true);
+  };
+
+  const handleInputBlur = () => {
+    onTypingStateChange(false);
+  };
 
   return (
     <div 
@@ -41,7 +57,7 @@ function ChatSection({
             className={`message ${msg.sender === username ? 'own-message' : ''}`}
           >
             <span className="sender">{msg.sender}</span>
-            <span className="content">{msg.content}</span>
+            <span className="content" style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
             <span className="timestamp">
               {new Date(msg.timestamp).toLocaleTimeString([], { 
                 hour: '2-digit', 
@@ -57,6 +73,8 @@ function ChatSection({
             type="text"
             value={inputMessage}
             onChange={(e) => onInputChange(e.target.value)}
+            onFocus={handleInputFocus}
+            onBlur={handleInputBlur}
             placeholder="메시지를 입력하세요"
             maxLength={200}
           />

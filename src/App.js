@@ -1,17 +1,28 @@
 // App.js
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { getRandomNickname } from '@woowa-babble/random-nickname';
-import { useWebSocket } from './hooks/useWebSocket';         // ★ 추가: 커스텀 훅
-import { ChatIcon, ChatCloseIcon, PaletteIcon, UserIcon, PaletteToggleIcon } from './components/Icon';
-import UsernameModal from './components/UsernameModal';
-import ChatSection from './components/ChatSection';
-import CanvasSection from './components/CanvasSection';
-import PaletteControls from './components/PaletteControls';
-import Toolbar from './components/Toolbar';
-import CursorLayer from './components/CursorLayer';
-import './App.css';   // 스타일
+import { useWebSocket } from './hooks/useWebSocket';
+import './App.css';
 
-// 사용할 팔레트 상수
+// Context Providers & Hooks
+import { CanvasProvider, useCanvas } from './contexts/CanvasContext';
+import { ChatProvider, useChat } from './contexts/ChatContext';
+import { CursorProvider, useCursor } from './contexts/CursorContext';
+
+// Components
+import Toolbar from './components/Toolbar';
+import PaletteControls from './components/PaletteControls';
+import ChatSection from './components/ChatSection';
+import CursorLayer from './components/CursorLayer';
+import CanvasSection from './components/CanvasSection';
+
+// 상수
+const CANVAS_SIZE = 256;
+const CELL_SIZE = 16;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+
+// 색상 팔레트
 const COLOR_PALETTE = [
   '#000000', '#666666', '#0000ff', '#00ff00',
   '#ff0000', '#ffff00', '#ffa500', '#800080',
@@ -19,289 +30,232 @@ const COLOR_PALETTE = [
   '#ff69b4', '#ffd700', '#ff4500', 'custom'
 ];
 
-function App() {
-  // 캔버스 관련 상수
-  const CANVAS_SIZE = 256; 
-  const CELL_SIZE = 16; 
-  const PADDING = 20;
-  const MIN_ZOOM = 1; 
-  const MAX_ZOOM = 4;
-
-  // ref 추가
-  const mainCanvasRef = useRef(null);
-
-  // 캔버스 픽셀 상태
-  const [canvasData, setCanvasData] = useState(
-    Array.from({ length: CANVAS_SIZE }, () => Array(CANVAS_SIZE).fill(null))
-  );
-  // 선택 색상
-  const [selectedColor, setSelectedColor] = useState('#ff0000');
-  // 뷰포트 (캔버스 이동/줌)
-  const [viewport, setViewport] = useState({
-    x: CANVAS_SIZE / 2 - CANVAS_SIZE / 4,
-    y: CANVAS_SIZE / 2 - CANVAS_SIZE / 4, 
-    zoom: 2,
-  });
-
-  // 채팅 상태
-  const [messages, setMessages] = useState([]);
-  const [inputMessage, setInputMessage] = useState('');
-
-  // 사용자 이름, 모달
+function AppContent() {
   const usernameRef = useRef('');
-  const [isUsernameModalOpen, setIsUsernameModalOpen] = useState(false);
-
-  // 채팅/팔레트 열림/닫힘
-  const [isChatVisible, setIsChatVisible] = useState(true);
-  const [isPaletteVisible, setIsPaletteVisible] = useState(true);
-
-  // 커서 관련
-  const [cursors, setCursors] = useState({});
+  const mainCanvasRef = useRef(null);
+  const [isPaletteVisible, setIsPaletteVisible] = React.useState(true);
+  const [isSpacePressed, setIsSpacePressed] = React.useState(false);
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
 
-  const chatContainerRef = useRef(null);
+  const { 
+    canvasData, 
+    setCanvasData, 
+    viewport, 
+    setViewport, 
+    updateCanvasPixel,
+    selectedColor,
+    fetchData 
+  } = useCanvas();
+  
+  const { addMessage, setInputMessage, inputMessage } = useChat();
+  const { updateCursor, removeCursor } = useCursor();
 
-  const type = 'animals'; // getRandomNickname에 사용
-
-  const [isTyping, setIsTyping] = useState(false);
-
-  const fetchCanvasData = async () => {
-    try {
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_API_URL}/api/canvas`);
-      const data = await response.json();
-
-      const initialCanvas = Array.from({ length: CANVAS_SIZE }, () =>
-        Array(CANVAS_SIZE).fill(null)
-      );
-      data.forEach(({ x, y, color }) => {
-        if (x >= 0 && x < CANVAS_SIZE && y >= 0 && y < CANVAS_SIZE) {
-          initialCanvas[y][x] = { x, y, color };
-        }
-      });
-
-      setCanvasData(initialCanvas);
-    } catch (error) {
-      console.error('캔버스 데이터 가져오기 오류:', error);
-    }
-  };
-
-  // 최초 실행
-  useEffect(() => {
-    fetchCanvasData();
-
-    usernameRef.current = getRandomNickname(type);
-    // 캔버스 정 중앙에서 시작
-    const initialZoom = 2;
-    const visibleCells = CANVAS_SIZE / initialZoom;
-    setViewport({
-      x: CANVAS_SIZE / 2 - visibleCells / 2,
-      y: CANVAS_SIZE / 2 - visibleCells / 2,
-      zoom: initialZoom,
-    });
-  }, []);
-
-  const generateRandomColor = () => {
-    return `#${Math.floor(Math.random() * 16777215).toString(16)}`;
-  };
-
-  // 커스텀 훅 사용
-  const {
-    clientRef,    // WebSocket client (필요 시 참조)
-    connect,
-    disconnect
-  } = useWebSocket({
-    backendUrl: process.env.REACT_APP_BACKEND_API_URL,
-    usernameRef,
-    chatContainerRef,
-    generateRandomColor,
-
-    // 캔버스 메시지 도착 시
-    onCanvasUpdate: (parsedMessage) => {
-      setCanvasData((prevCanvas) => {
+  // WebSocket 연결 설정
+  const { clientRef } = useWebSocket({
+    onCanvasMessage: (message) => {
+      setCanvasData(prevCanvas => {
         const newCanvas = [...prevCanvas];
-        if (parsedMessage.updates && Array.isArray(parsedMessage.updates)) {
-          parsedMessage.updates.forEach(({ x, y, color }) => {
-            if (x >= 0 && x < CANVAS_SIZE && y >= 0 && y < CANVAS_SIZE) {
-              newCanvas[y][x] = { x, y, color };
-            }
-          });
-        } else if (parsedMessage.x !== undefined && parsedMessage.y !== undefined) {
-          const { x, y, color } = parsedMessage;
-          if (x >= 0 && x < CANVAS_SIZE && y >= 0 && y < CANVAS_SIZE) {
-            newCanvas[y][x] = { x, y, color };
-          }
-        }
+        newCanvas[message.y][message.x] = message;
         return newCanvas;
       });
     },
-
-    // 채팅 메시지 도착 시
-    onChatUpdate: (chatMessage) => {
-      setMessages((prev) => {
-        const isDuplicate = prev.some(msg => 
-          msg.sender === chatMessage.sender && 
-          msg.content === chatMessage.content &&
-          Math.abs(new Date(msg.timestamp) - new Date(chatMessage.timestamp)) < 1000
-        );
-        if (isDuplicate) return prev;
-        return [...prev, chatMessage];
-      });
-    },
-
-    // 커서 위치 업데이트
-    onCursorUpdate: (cursorData) => {
-      setCursors(prev => ({
-        ...prev,
-        [cursorData.username]: {
-          x: cursorData.x,
-          y: cursorData.y,
-          color: prev[cursorData.username]?.color || generateRandomColor()
-        }
-      }));
-    },
-
-    // 커서 제거
-    onCursorRemove: (removedUsername) => {
-      setCursors(prev => {
-        const newCursors = { ...prev };
-        delete newCursors[removedUsername.username];
-        return newCursors;
-      });
-    },
+    onChatMessage: addMessage,
+    onCursorMessage: (message) => updateCursor(message.username, message.x, message.y),
+    onCursorRemoveMessage: (message) => removeCursor(message.username)
   });
 
-  // mount/unmount 시점에 connect/disconnect
+  // 초기화
   useEffect(() => {
-    connect();
-    return () => {
-      disconnect();
+    const savedUsername = localStorage.getItem('username');
+    if (savedUsername) {
+      usernameRef.current = savedUsername;
+    } else {
+      const newUsername = getRandomNickname('animals');
+      usernameRef.current = newUsername;
+      localStorage.setItem('username', newUsername);
+    }
+
+    fetchData();
+  }, [fetchData]);
+
+  // 유틸: 화면 좌표 -> 캔버스 좌표
+  const calculateCursorPosition = useCallback((clientX, clientY, vp) => {
+    const scaledCellSize = CELL_SIZE / vp.zoom;
+    const totalCanvasWidth = CANVAS_SIZE * scaledCellSize;
+    const totalCanvasHeight = CANVAS_SIZE * scaledCellSize;
+    const offsetX = (window.innerWidth - totalCanvasWidth) / 2;
+    const offsetY = (window.innerHeight - totalCanvasHeight) / 2;
+
+    const x = clientX - offsetX;
+    const y = clientY - offsetY;
+
+    return {
+      x: vp.x + x / scaledCellSize,
+      y: vp.y + y / scaledCellSize
     };
-    // eslint-disable-next-line
   }, []);
 
-  const handleMouseDown = (e) => {
-    if (e.button === 0) {
-      isDragging.current = true;
-      dragStart.current = { x: e.clientX, y: e.clientY };
-    }
-  };
+  const getScreenCoords = useCallback((x, y) => {
+    const scaledCellSize = CELL_SIZE / viewport.zoom;
+    const totalCanvasWidth = CANVAS_SIZE * scaledCellSize;
+    const totalCanvasHeight = CANVAS_SIZE * scaledCellSize;
+    const offsetX = (window.innerWidth - totalCanvasWidth) / 2;
+    const offsetY = (window.innerHeight - totalCanvasHeight) / 2;
 
-  const handleMouseMove = (e) => {
-    if (!usernameRef.current || !clientRef.current?.connected) return;
+    return {
+      left: `${(x - viewport.x) * scaledCellSize + offsetX}px`,
+      top: `${(y - viewport.y) * scaledCellSize + offsetY}px`
+    };
+  }, [viewport]);
 
-    // ref가 존재하는지 확인
-    if (!mainCanvasRef.current) return;
-
-    // 커서 위치 WS 전송
-    const rect = mainCanvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const canvasX = Math.floor(x / (CELL_SIZE / viewport.zoom) + viewport.x);
-    const canvasY = Math.floor(y / (CELL_SIZE / viewport.zoom) + viewport.y);
-
-    clientRef.current.publish({
-      destination: '/app/cursors',
-      body: JSON.stringify({
-        username: usernameRef.current,
-        x: canvasX,
-        y: canvasY
-      })
-    });
-
-    // 드래그 이동
-    if (!isDragging.current) return;
-    const dx = (e.clientX - dragStart.current.x);
-    const dy = (e.clientY - dragStart.current.y);
-
-    // 줌 레벨에 따른 드래그 속도
-    const dragSpeed = Math.max(0.5, Math.min(2, viewport.zoom));
-    setViewport((prev) => {
-      const newX = prev.x - dx / (CELL_SIZE * dragSpeed);
-      const newY = prev.y - dy / (CELL_SIZE * dragSpeed);
-
-      const maxX = CANVAS_SIZE - CANVAS_SIZE / prev.zoom + PADDING;
-      const maxY = CANVAS_SIZE - CANVAS_SIZE / prev.zoom + PADDING;
-
-      return {
-        ...prev,
-        x: Math.max(-PADDING, Math.min(maxX, newX)),
-        y: Math.max(-PADDING, Math.min(maxY, newY))
-      };
-    });
-    dragStart.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseUp = () => {
-    isDragging.current = false;
-  };
-
-  const handleWheel = (e) => {
+  // 마우스 휠 (줌)
+  const handleWheel = useCallback((e) => {
     if (e.target.closest('.chat-section')) return;
     e.preventDefault();
 
-    // ref가 존재하는지 확인
-    if (!mainCanvasRef.current) return;
-
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    setViewport((prev) => {
-      const rect = mainCanvasRef.current.getBoundingClientRect();
-      const mouseCanvasX = (e.clientX - rect.left);
-      const mouseCanvasY = (e.clientY - rect.top);
+    setViewport(prev => {
+      const rect = mainCanvasRef.current?.getBoundingClientRect();
+      if (!rect) return prev;
 
-      const pixelX = mouseCanvasX / (CELL_SIZE * prev.zoom) + prev.x;
-      const pixelY = mouseCanvasY / (CELL_SIZE * prev.zoom) + prev.y;
+      const scaledCellSize = CELL_SIZE / prev.zoom;
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const pointX = mouseX / scaledCellSize + prev.x;
+      const pointY = mouseY / scaledCellSize + prev.y;
 
       const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * zoomFactor));
-      const newX = pixelX - mouseCanvasX / (CELL_SIZE * newZoom);
-      const newY = pixelY - mouseCanvasY / (CELL_SIZE * newZoom);
+      const newScaledCellSize = CELL_SIZE / newZoom;
+      const newX = pointX - mouseX / newScaledCellSize;
+      const newY = pointY - mouseY / newScaledCellSize;
 
-      const maxX = CANVAS_SIZE - CANVAS_SIZE / newZoom + PADDING;
-      const maxY = CANVAS_SIZE - CANVAS_SIZE / newZoom + PADDING;
-
-      return {
+      const newViewport = {
         zoom: newZoom,
-        x: Math.max(-PADDING, Math.min(maxX, newX)),
-        y: Math.max(-PADDING, Math.min(maxY, newY))
+        x: Math.max(-CANVAS_SIZE * 0.1, Math.min(CANVAS_SIZE * 1.1, newX)),
+        y: Math.max(-CANVAS_SIZE * 0.1, Math.min(CANVAS_SIZE * 1.1, newY)),
       };
+
+      // 뷰포트 변경 시, 커서 위치도 갱신
+      if (clientRef.current?.connected) {
+        const cursorPos = calculateCursorPosition(e.clientX, e.clientY, newViewport);
+        clientRef.current.publish({
+          destination: '/app/cursors',
+          body: JSON.stringify({
+            username: usernameRef.current,
+            x: cursorPos.x,
+            y: cursorPos.y
+          })
+        });
+      }
+
+      return newViewport;
     });
-  };
+  }, [calculateCursorPosition]);
 
-  const handlePixelClick = async (clickedX, clickedY) => {
-    if (isDragging.current) return;
-    if (clickedX < 0 || clickedX >= CANVAS_SIZE || clickedY < 0 || clickedY >= CANVAS_SIZE) return;
+  // 마우스 이동
+  const handleMouseMove = useCallback((e) => {
+    if (!usernameRef.current || !clientRef.current) return;
 
-    const pixelDTO = { x: clickedX, y: clickedY, color: selectedColor };
-    try {
-      // REST API 예시 (WebSocket publish로 해도 무관)
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_API_URL}/api/pixel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pixelDTO),
+    if (isDragging.current) {
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+
+      setViewport(prev => {
+        const scaledCellSize = CELL_SIZE / prev.zoom;
+        return {
+          ...prev,
+          x: prev.x - dx / scaledCellSize,
+          y: prev.y - dy / scaledCellSize
+        };
       });
-      if (!response.ok) throw new Error('픽셀 업데이트 실패');
-
-      // 로컬 상태 업데이트
-      setCanvasData((prevCanvas) => {
-        const newCanvas = [...prevCanvas];
-        newCanvas[clickedY][clickedX] = { x: clickedX, y: clickedY, color: selectedColor };
-        return newCanvas;
-      });
-    } catch (error) {
-      console.error('픽셀 업데이트 오류:', error);
+      dragStart.current = { x: e.clientX, y: e.clientY };
     }
-  };
 
-  const handleSendMessage = (e) => {
+    // 커서 위치 전송
+    if (clientRef.current?.connected) {
+      const cursorPos = calculateCursorPosition(e.clientX, e.clientY, viewport);
+      clientRef.current.publish({
+        destination: '/app/cursors',
+        body: JSON.stringify({
+          username: usernameRef.current,
+          x: cursorPos.x,
+          y: cursorPos.y
+        })
+      });
+    }
+  }, [viewport, calculateCursorPosition]);
+
+  // 마우스 다운
+  const handleMouseDown = useCallback((e) => {
+    dragStart.current = { x: e.clientX, y: e.clientY };
+    if (e.button === 0 && isSpacePressed) {
+      isDragging.current = true;
+      mainCanvasRef.current?.classList.add('dragging');
+    }
+  }, [isSpacePressed]);
+
+  // 마우스 업
+  const handleMouseUp = useCallback(() => {
+    if (isDragging.current) {
+      isDragging.current = false;
+      mainCanvasRef.current?.classList.remove('dragging');
+    }
+  }, []);
+
+  // 마우스 캔버스 영역 벗어남
+  const handleMouseLeave = useCallback(() => {
+    if (isDragging.current) {
+      isDragging.current = false;
+      mainCanvasRef.current?.classList.remove('dragging');
+    }
+  }, []);
+
+  // 캔버스 클릭
+  const handleCanvasClick = useCallback(async (e) => {
+    if (isSpacePressed || isDragging.current) return;
+    if (Math.abs(e.clientX - dragStart.current.x) > 5 ||
+        Math.abs(e.clientY - dragStart.current.y) > 5) {
+      return;
+    }
+
+    if (!mainCanvasRef.current) return;
+
+    const rect = mainCanvasRef.current.getBoundingClientRect();
+    const scaledCellSize = CELL_SIZE / viewport.zoom;
+
+    const totalCanvasWidth = CANVAS_SIZE * scaledCellSize;
+    const totalCanvasHeight = CANVAS_SIZE * scaledCellSize;
+    const offsetX = (window.innerWidth - totalCanvasWidth) / 2;
+    const offsetY = (window.innerHeight - totalCanvasHeight) / 2;
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const clickedX = Math.floor((x - offsetX) / scaledCellSize + viewport.x);
+    const clickedY = Math.floor((y - offsetY) / scaledCellSize + viewport.y);
+
+    if (clickedX >= 0 && clickedX < CANVAS_SIZE && clickedY >= 0 && clickedY < CANVAS_SIZE) {
+      const pixelDTO = { x: clickedX, y: clickedY, color: selectedColor };
+      try {
+        await updateCanvasPixel(pixelDTO);
+      } catch (error) {
+        console.error('픽셀 업데이트 오류:', error);
+      }
+    }
+  }, [isSpacePressed, viewport, selectedColor, updateCanvasPixel]);
+
+  // 채팅 메시지 전송
+  const handleSendMessage = useCallback((e) => {
     e.preventDefault();
-    if (!inputMessage || !usernameRef.current.trim()) return;
+    if (!inputMessage.trim() || !usernameRef.current.trim()) return;
 
-    const message = { 
+    const message = {
       sender: usernameRef.current.trim(),
-      content: inputMessage,
+      content: inputMessage.trim(),
       timestamp: Date.now()
     };
-    
+
     if (clientRef.current?.connected) {
       clientRef.current.publish({
         destination: '/app/chat/send',
@@ -309,54 +263,53 @@ function App() {
       });
       setInputMessage('');
     }
-  };
+  }, [inputMessage, setInputMessage]);
 
-  const handleInputChange = (val) => {
-    setInputMessage(val);
-  };
-
-  const handleChatScroll = (e) => {
-    e.stopPropagation();
-  };
-
-  const toggleChat = () => setIsChatVisible((v) => !v);
-
-  const handleColorSelect = (color) => {
-    if (color === 'custom') return;
-    setSelectedColor(color);
-  };
-
-  const togglePalette = () => {
-    setIsPaletteVisible((v) => !v);
-  };
-
-  const handleUsernameModalOpen = () => {
-    setIsUsernameModalOpen(true);
-  };
-  const handleUsernameModalClose = () => {
-    setIsUsernameModalOpen(false);
-  };
-  const handleUsernameChange = (newUsername) => {
-    usernameRef.current = newUsername;
-  };
-
-  // 키보드 이벤트 핸들러 추가
+  // 스페이스바 이벤트
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === ' ' && !isTyping) {
+      if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
-        // 스페이스바로 하는 캔버스 조작 로직
+        setIsSpacePressed(true);
+        document.body.style.cursor = 'grab';
       }
     };
-
+    const handleKeyUp = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsSpacePressed(false);
+        document.body.style.cursor = 'default';
+      }
+    };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isTyping]);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
 
-  // 채팅 입력 상태 변경 핸들러
-  const handleTypingStateChange = (typing) => {
-    setIsTyping(typing);
-  };
+  // wheel 이벤트 핸들러를 컨테이너에 직접 추가
+  useEffect(() => {
+    const container = document.querySelector('.app-container');
+    if (!container) return;
+
+    const wheelHandler = (e) => {
+      if (e.target.closest('.chat-section')) return;
+      e.preventDefault();
+      handleWheel(e);
+    };
+
+    container.addEventListener('wheel', wheelHandler, { 
+      passive: false 
+    });
+
+    return () => {
+      container.removeEventListener('wheel', wheelHandler, { 
+        passive: false 
+      });
+    };
+  }, [handleWheel]);
 
   return (
     <div
@@ -364,65 +317,48 @@ function App() {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onWheel={handleWheel}
+      onMouseLeave={handleMouseLeave}
     >
+      <CanvasSection
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        onCanvasClick={handleCanvasClick}
+        mainCanvasRef={mainCanvasRef}
+      />
+
       <CursorLayer
-        cursors={cursors}
-        username={usernameRef.current}
-        viewport={viewport}
-        cellSize={CELL_SIZE}
+        usernameRef={usernameRef}
+        getScreenCoords={getScreenCoords}
       />
 
-      {/* 툴바 */}
-      <Toolbar
-        isChatVisible={isChatVisible}
-        onToggleChat={toggleChat}
-      />
+      <Toolbar />
 
-      {/* 팔레트 */}
       <PaletteControls
         isPaletteVisible={isPaletteVisible}
-        togglePalette={togglePalette}
-        selectedColor={selectedColor}
-        onColorSelect={handleColorSelect} 
+        togglePalette={() => setIsPaletteVisible(!isPaletteVisible)}
         colorPalette={COLOR_PALETTE}
       />
 
-      {/* 캔버스 */}
-      <CanvasSection
-        ref={mainCanvasRef}
-        canvasData={canvasData}
-        viewport={viewport}
-        cellSize={CELL_SIZE}
-        canvasSize={CANVAS_SIZE}
-        padding={PADDING}
-        onPixelClick={handlePixelClick}
-      />
-
-      {/* 채팅 */}
       <ChatSection
-        isChatVisible={isChatVisible}
         username={usernameRef.current}
-        messages={messages}
-        inputMessage={inputMessage}
-        onInputChange={handleInputChange}
         onSendMessage={handleSendMessage}
-        onChatScroll={handleChatScroll}
-        onUsernameClick={handleUsernameModalOpen}
-        chatContainerRef={chatContainerRef}
-        onTypingStateChange={handleTypingStateChange}
       />
-
-      {/* 유저 이름 모달 */}
-      {isUsernameModalOpen && (
-        <UsernameModal
-          initialUsername={usernameRef.current}
-          onClose={handleUsernameModalClose}
-          onUsernameChange={handleUsernameChange}
-        />
-      )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <CanvasProvider>
+      <ChatProvider>
+        <CursorProvider>
+          <AppContent />
+        </CursorProvider>
+      </ChatProvider>
+    </CanvasProvider>
   );
 }
 

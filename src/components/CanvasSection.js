@@ -1,101 +1,105 @@
-// src/components/CanvasSection.jsx
-import React, { forwardRef, useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
+import { useCanvas } from '../contexts/CanvasContext';
 
-const CanvasSection = forwardRef(({
-  canvasData,
-  viewport,
-  cellSize,
-  canvasSize,
-  padding,
-  // 이벤트 핸들러들
+function CanvasSection({
+  onWheel,
   onMouseDown,
   onMouseMove,
   onMouseUp,
-  onWheel,
-  // 가장 중요한: (x, y) 계산 후 부모에게 넘길 함수
-  onPixelClick,
-}, ref) => {
-  const canvasRef = useRef(null);
+  onMouseLeave,
+  onCanvasClick,
+  mainCanvasRef
+}) {
+  const { canvasData, viewport, placedPixels, CANVAS_SIZE, CELL_SIZE } = useCanvas();
 
-  // 1) 캔버스 렌더링 함수
-  const renderCanvas = () => {
-    if (!canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
+  // wheel 이벤트 리스너 추가
+  useEffect(() => {
+    const canvas = mainCanvasRef.current;
+    if (!canvas) return;
+
+    // wheel 이벤트 핸들러
+    const wheelHandler = (e) => {
+      e.preventDefault();
+      onWheel(e);
+    };
+
+    // passive: false 옵션 추가
+    canvas.addEventListener('wheel', wheelHandler, { 
+      passive: false 
+    });
+    
+    return () => {
+      canvas.removeEventListener('wheel', wheelHandler, { 
+        passive: false 
+      });
+    };
+  }, [onWheel]);
+
+  // 실제 캔버스를 그리는 함수
+  const renderCanvas = useCallback(() => {
+    const mainCanvas = mainCanvasRef.current;
+    if (!mainCanvas) return;
+
+    const context = mainCanvas.getContext('2d');
     if (!context) return;
 
-    // (1) 캔버스 크기 조정
-    if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+    // 캔버스 크기 조정
+    if (mainCanvas.width !== window.innerWidth || mainCanvas.height !== window.innerHeight) {
+      mainCanvas.width = window.innerWidth;
+      mainCanvas.height = window.innerHeight;
     }
 
-    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
     context.imageSmoothingEnabled = false;
 
-    // (2) 스케일링된 셀 크기
-    const scaledCellSize = cellSize / viewport.zoom;
+    // 스케일링된 셀 크기
+    const scaledCellSize = CELL_SIZE / viewport.zoom;
+    const totalCanvasWidth = CANVAS_SIZE * scaledCellSize;
+    const totalCanvasHeight = CANVAS_SIZE * scaledCellSize;
+    const offsetX = (window.innerWidth - totalCanvasWidth) / 2;
+    const offsetY = (window.innerHeight - totalCanvasHeight) / 2;
 
-    // (3) 렌더링할 영역 계산
-    const startX = Math.max(0, Math.floor(viewport.x - padding));
-    const startY = Math.max(0, Math.floor(viewport.y - padding));
-    const endX = Math.min(canvasSize, Math.ceil(viewport.x + canvas.width / scaledCellSize + padding));
-    const endY = Math.min(canvasSize, Math.ceil(viewport.y + canvas.height / scaledCellSize + padding));
+    // 픽셀 렌더링
+    for (let y = 0; y < CANVAS_SIZE; y++) {
+      for (let x = 0; x < CANVAS_SIZE; x++) {
+        const renderX = Math.floor(offsetX + (x - viewport.x) * scaledCellSize);
+        const renderY = Math.floor(offsetY + (y - viewport.y) * scaledCellSize);
+        const renderSize = Math.max(1, Math.ceil(scaledCellSize));
 
-    // (4) 픽셀 렌더링
-    for (let y = startY; y < endY; y++) {
-      for (let x = startX; x < endX; x++) {
         const pixel = canvasData[y]?.[x];
         context.fillStyle = pixel?.color || '#ffffff';
-        context.fillRect(
-          (x - viewport.x) * scaledCellSize,
-          (y - viewport.y) * scaledCellSize,
-          scaledCellSize,
-          scaledCellSize
-        );
+        context.fillRect(renderX, renderY, renderSize, renderSize);
       }
     }
-  };
 
-  // 2) 캔버스가 업데이트될 때마다 렌더링
+    // 픽셀 클릭 시 강조선
+    context.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+    context.lineWidth = 2;
+    placedPixels.forEach(pixel => {
+      const renderX = Math.floor(offsetX + (pixel.x - viewport.x) * scaledCellSize);
+      const renderY = Math.floor(offsetY + (pixel.y - viewport.y) * scaledCellSize);
+      const renderSize = Math.max(1, Math.ceil(scaledCellSize));
+      context.strokeRect(renderX, renderY, renderSize, renderSize);
+    });
+
+  }, [canvasData, viewport, placedPixels, CANVAS_SIZE, CELL_SIZE]);
+
+  // 화면 업데이트 시 매번 캔버스 렌더링
   useEffect(() => {
     requestAnimationFrame(renderCanvas);
-    // eslint-disable-next-line
-  }, [canvasData, viewport]);
-
-  // 3) 내부 onClick → (x, y) 계산 → 부모의 onPixelClick 호출
-  const handleClick = (e) => {
-    if (!onPixelClick) return; // 콜백이 없으면 무시
-    if (!canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-
-    // 배율 반영
-    const scaledCellSize = cellSize / viewport.zoom;
-    const clickedX = Math.floor((e.clientX - rect.left) / scaledCellSize + viewport.x);
-    const clickedY = Math.floor((e.clientY - rect.top) / scaledCellSize + viewport.y);
-
-    onPixelClick(clickedX, clickedY);
-  };
+  }, [renderCanvas]);
 
   return (
-    <div 
-      ref={ref}
-      className="canvas-section"
-      onClick={handleClick}
+    <canvas
+      ref={mainCanvasRef}
+      className="main-canvas"
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
-      onWheel={onWheel}
-    >
-      <canvas
-        ref={canvasRef}
-        className="canvas"
-        // 크기는 내부에서 조정하므로 width/height 속성은 생략 가능
-      />
-    </div>
+      onMouseLeave={onMouseLeave}
+      onClick={onCanvasClick}
+    />
   );
-});
+}
 
 export default CanvasSection;

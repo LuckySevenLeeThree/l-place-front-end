@@ -1,17 +1,14 @@
 // src/components/PaletteControls.jsx
 import React from 'react';
-import { PaletteToggleIcon } from './Icon'; // Icon 경로에 맞춰 수정
+import { useCanvas } from '../contexts/CanvasContext';
+import { PaletteToggleIcon } from './Icons';
 
-function PaletteControls({
-  isPaletteVisible,
-  togglePalette,
-  selectedColor,
-  onColorSelect,
-  colorPalette // ex: COLOR_PALETTE 배열
-}) {
+function PaletteControls({ isPaletteVisible, togglePalette, colorPalette }) {
+  const { selectedColor, setSelectedColor } = useCanvas();
+
   return (
     <div className="palette-controls">
-      <button 
+      <button
         className={`palette-toggle ${isPaletteVisible ? 'active' : ''}`}
         onClick={togglePalette}
         title={isPaletteVisible ? '팔레트 숨기기' : '팔레트 보기'}
@@ -22,7 +19,7 @@ function PaletteControls({
       <div className={`color-picker ${!isPaletteVisible ? 'hidden' : ''}`}>
         {colorPalette.map((color) => (
           color === 'custom' ? (
-            <div 
+            <div
               key={color}
               className={`custom-color-button ${selectedColor === color ? 'selected' : ''}`}
             >
@@ -30,7 +27,7 @@ function PaletteControls({
                 type="color"
                 className="custom-color-input"
                 value={selectedColor}
-                onChange={(e) => onColorSelect(e.target.value)}
+                onChange={(e) => setSelectedColor(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
               />
             </div>
@@ -41,7 +38,7 @@ function PaletteControls({
               style={{ backgroundColor: color }}
               onClick={(e) => {
                 e.stopPropagation();
-                onColorSelect(color);
+                setSelectedColor(color);
               }}
             />
           )

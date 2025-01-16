@@ -1,46 +1,37 @@
-// src/components/CursorLayer.jsx
+import React, { useMemo } from 'react';
+import { useCursor } from '../contexts/CursorContext';
 
-import React from 'react';
+function CursorLayer({ usernameRef, getScreenCoords }) {
+  const { cursors } = useCursor();
+  
+  // 커서들을 배열로 memoize하여 성능 최적화
+  const cursorEntries = useMemo(() => Object.entries(cursors), [cursors]);
 
-function CursorLayer({
-  cursors,
-  username,      // 현재 내 username
-  viewport,
-  cellSize,
-}) {
   return (
     <>
-      {Object.entries(cursors).map(([cursorUsername, position]) => {
-        if (cursorUsername === username) {
-          // 내 커서는 그리지 않는다면 (기존 로직 유지)
-          return null;
-        }
-
-        const left = (position.x - viewport.x) * (cellSize / viewport.zoom);
-        const top = (position.y - viewport.y) * (cellSize / viewport.zoom);
-
-        return (
+      {cursorEntries.map(([cursorUsername, position]) => (
+        usernameRef.current !== cursorUsername && (
           <div
             key={cursorUsername}
             className="cursor"
-            style={{ left, top }}
+            style={getScreenCoords(position.x, position.y)}
           >
-            <div
+            <div 
               className="cursor-pointer"
               style={{ backgroundColor: position.color }}
             />
-            <div
+            <div 
               className="cursor-username"
-              style={{
+              style={{ 
                 border: `2px solid ${position.color}`,
-                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                backgroundColor: 'rgba(0, 0, 0, 0.5)'
               }}
             >
               {cursorUsername}
             </div>
           </div>
-        );
-      })}
+        )
+      ))}
     </>
   );
 }
